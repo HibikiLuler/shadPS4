@@ -418,6 +418,19 @@ struct PM4DmaData {
     }
 };
 
+struct PM4CmdRewind {
+    PM4Type3Header header;
+    union {
+        u32 raw;
+        BitField<24, 1, u32> offload_enable; ///< Enable offload polling valid bit to IQ
+        BitField<31, 1, u32> valid;          ///< Set when subsequent packets are valid
+    };
+
+    bool Valid() const {
+        return valid;
+    }
+};
+
 struct PM4CmdWaitRegMem {
     enum class Engine : u32 { Me = 0u, Pfp = 1u };
     enum class MemSpace : u32 { Register = 0u, Memory = 1u };
@@ -778,14 +791,15 @@ struct PM4CmdDispatchIndirect {
     u32 dispatch_initiator; ///< Dispatch Initiator Register
 };
 
-struct PM4CmdDrawIndirect {
-    struct DrawInstancedArgs {
-        u32 vertex_count_per_instance;
-        u32 instance_count;
-        u32 start_vertex_location;
-        u32 start_instance_location;
-    };
+struct DrawIndirectArgs {
+    u32 vertex_count_per_instance;
+    u32 instance_count;
+    u32 start_vertex_location;
+    u32 start_instance_location;
+};
+static_assert(sizeof(DrawIndirectArgs) == 0x10u);
 
+struct PM4CmdDrawIndirect {
     PM4Type3Header header; ///< header
     u32 data_offset;       ///< Byte aligned offset where the required data structure starts
     union {
@@ -801,15 +815,16 @@ struct PM4CmdDrawIndirect {
     u32 draw_initiator; ///< Draw Initiator Register
 };
 
-struct PM4CmdDrawIndexIndirect {
-    struct DrawIndexInstancedArgs {
-        u32 index_count_per_instance;
-        u32 instance_count;
-        u32 start_index_location;
-        u32 base_vertex_location;
-        u32 start_instance_location;
-    };
+struct DrawIndexedIndirectArgs {
+    u32 index_count_per_instance;
+    u32 instance_count;
+    u32 start_index_location;
+    u32 base_vertex_location;
+    u32 start_instance_location;
+};
+static_assert(sizeof(DrawIndexedIndirectArgs) == 0x14u);
 
+struct PM4CmdDrawIndexIndirect {
     PM4Type3Header header; ///< header
     u32 data_offset;       ///< Byte aligned offset where the required data structure starts
     union {
@@ -817,11 +832,38 @@ struct PM4CmdDrawIndexIndirect {
         BitField<0, 16, u32> base_vtx_loc; ///< Offset where the CP will write the
                                            ///< BaseVertexLocation it fetched from memory
     };
-    union { // NOTE: this one is undocumented in AMD spec, but Gnm driver writes this field
+    union {
         u32 dw3;
         BitField<0, 16, u32> start_inst_loc; ///< Offset where the CP will write the
                                              ///< StartInstanceLocation it fetched from memory
     };
+    u32 draw_initiator; ///< Draw Initiator Register
+};
+
+struct PM4CmdDrawIndexIndirectMulti {
+    PM4Type3Header header; ///< header
+    u32 data_offset;       ///< Byte aligned offset where the required data structure starts
+    union {
+        u32 dw2;
+        BitField<0, 16, u32> base_vtx_loc; ///< Offset where the CP will write the
+                                           ///< BaseVertexLocation it fetched from memory
+    };
+    union {
+        u32 dw3;
+        BitField<0, 16, u32> start_inst_loc; ///< Offset where the CP will write the
+                                             ///< StartInstanceLocation it fetched from memory
+    };
+    union {
+        u32 dw4;
+        BitField<0, 16, u32> drawIndexLoc; ///< register offset to write the Draw Index count
+        BitField<30, 1, u32>
+            countIndirectEnable; ///< Indicates the data structure count is in memory
+        BitField<31, 1, u32>
+            drawIndexEnable; ///< Enables writing of Draw Index count to DRAW_INDEX_LOC
+    };
+    u32 count;          ///< Count of data structures to loop through before going to next packet
+    u64 countAddr;      ///< DWord aligned Address[31:2]; Valid if countIndirectEnable is set
+    u32 stride;         ///< Stride in memory from one data structure to the next
     u32 draw_initiator; ///< Draw Initiator Register
 };
 

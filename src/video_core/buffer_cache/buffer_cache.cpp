@@ -5,6 +5,7 @@
 #include "common/alignment.h"
 #include "common/scope_exit.h"
 #include "common/types.h"
+#include "shader_recompiler/frontend/fetch_shader.h"
 #include "shader_recompiler/info.h"
 #include "video_core/amdgpu/liverpool.h"
 #include "video_core/buffer_cache/buffer_cache.h"
@@ -107,7 +108,8 @@ void BufferCache::DownloadBufferMemory(Buffer& buffer, VAddr device_addr, u64 si
     }
 }
 
-bool BufferCache::BindVertexBuffers(const Shader::Info& vs_info) {
+bool BufferCache::BindVertexBuffers(
+    const Shader::Info& vs_info, const std::optional<Shader::Gcn::FetchShaderData>& fetch_shader) {
     boost::container::small_vector<vk::VertexInputAttributeDescription2EXT, 16> attributes;
     boost::container::small_vector<vk::VertexInputBindingDescription2EXT, 16> bindings;
     SCOPE_EXIT {
@@ -126,7 +128,7 @@ bool BufferCache::BindVertexBuffers(const Shader::Info& vs_info) {
         }
     };
 
-    if (vs_info.vs_inputs.empty()) {
+    if (!fetch_shader || fetch_shader->attributes.empty()) {
         return false;
     }
 
@@ -150,30 +152,29 @@ bool BufferCache::BindVertexBuffers(const Shader::Info& vs_info) {
     // Calculate buffers memory overlaps
     bool has_step_rate = false;
     boost::container::static_vector<BufferRange, NumVertexBuffers> ranges{};
-    for (const auto& input : vs_info.vs_inputs) {
-        if (input.instance_step_rate == Shader::Info::VsInput::InstanceIdType::OverStepRate0 ||
-            input.instance_step_rate == Shader::Info::VsInput::InstanceIdType::OverStepRate1) {
+    for (const auto& attrib : fetch_shader->attributes) {
+        if (attrib.UsesStepRates()) {
             has_step_rate = true;
             continue;
         }
 
-        const auto& buffer = vs_info.ReadUdReg<AmdGpu::Buffer>(input.sgpr_base, input.dword_offset);
+        const auto& buffer = attrib.GetSharp(vs_info);
         if (buffer.GetSize() == 0) {
             continue;
         }
         guest_buffers.emplace_back(buffer);
         ranges.emplace_back(buffer.base_address, buffer.base_address + buffer.GetSize());
         attributes.push_back({
-            .location = input.binding,
-            .binding = input.binding,
+            .location = attrib.semantic,
+            .binding = attrib.semantic,
             .format =
                 Vulkan::LiverpoolToVK::SurfaceFormat(buffer.GetDataFmt(), buffer.GetNumberFmt()),
             .offset = 0,
         });
         bindings.push_back({
-            .binding = input.binding,
+            .binding = attrib.semantic,
             .stride = buffer.GetStride(),
-            .inputRate = input.instance_step_rate == Shader::Info::VsInput::None
+            .inputRate = attrib.GetStepRate() == Shader::Gcn::VertexAttribute::InstanceIdType::None
                              ? vk::VertexInputRate::eVertex
                              : vk::VertexInputRate::eInstance,
             .divisor = 1,
@@ -234,24 +235,25 @@ bool BufferCache::BindVertexBuffers(const Shader::Info& vs_info) {
 }
 
 u32 BufferCache::BindIndexBuffer(bool& is_indexed, u32 index_offset) {
-    // Emulate QuadList primitive type with CPU made index buffer.
+    // Emulate QuadList and Polygon primitive types with CPU made index buffer.
     const auto& regs = liverpool->regs;
-    if (regs.primitive_type == AmdGpu::PrimitiveType::QuadList) {
-        is_indexed = true;
+    if (!is_indexed) {
+        if (regs.primitive_type != AmdGpu::PrimitiveType::Polygon) {
+            return regs.num_indices;
+        }
 
         // Emit indices.
         const u32 index_size = 3 * regs.num_indices;
         const auto [data, offset] = stream_buffer.Map(index_size);
-        Vulkan::LiverpoolToVK::EmitQuadToTriangleListIndices(data, regs.num_indices);
+        Vulkan::LiverpoolToVK::EmitPolygonToTriangleListIndices(data, regs.num_indices);
         stream_buffer.Commit();
 
         // Bind index buffer.
+        is_indexed = true;
+
         const auto cmdbuf = scheduler.CommandBuffer();
         cmdbuf.bindIndexBuffer(stream_buffer.Handle(), offset, vk::IndexType::eUint16);
         return index_size / sizeof(u16);
-    }
-    if (!is_indexed) {
-        return regs.num_indices;
     }
 
     // Figure out index type and size.
@@ -261,6 +263,10 @@ u32 BufferCache::BindIndexBuffer(bool& is_indexed, u32 index_offset) {
     const u32 index_size = is_index16 ? sizeof(u16) : sizeof(u32);
     VAddr index_address = regs.index_base_address.Address<VAddr>();
     index_address += index_offset * index_size;
+
+    if (regs.primitive_type == AmdGpu::PrimitiveType::Polygon) {
+        UNREACHABLE();
+    }
 
     // Bind index buffer.
     const u32 index_buffer_size = regs.num_indices * index_size;
@@ -333,7 +339,8 @@ std::pair<Buffer*, u32> BufferCache::ObtainBuffer(VAddr device_addr, u32 size, b
     return {&buffer, buffer.Offset(device_addr)};
 }
 
-std::pair<Buffer*, u32> BufferCache::ObtainViewBuffer(VAddr gpu_addr, u32 size) {
+std::pair<Buffer*, u32> BufferCache::ObtainViewBuffer(VAddr gpu_addr, u32 size, bool prefer_gpu) {
+    // Check if any buffer contains the full requested range.
     const u64 page = gpu_addr >> CACHING_PAGEBITS;
     const BufferId buffer_id = page_table[page];
     if (buffer_id) {
@@ -343,6 +350,13 @@ std::pair<Buffer*, u32> BufferCache::ObtainViewBuffer(VAddr gpu_addr, u32 size) 
             return {&buffer, buffer.Offset(gpu_addr)};
         }
     }
+    // If no buffer contains the full requested range but some buffer within was GPU-modified,
+    // fall back to ObtainBuffer to create a full buffer and avoid losing GPU modifications.
+    // This is only done if the request prefers to use GPU memory, otherwise we can skip it.
+    if (prefer_gpu && memory_tracker.IsRegionGpuModified(gpu_addr, size)) {
+        return ObtainBuffer(gpu_addr, size, false, false);
+    }
+    // In all other cases, just do a CPU copy to the staging buffer.
     const u32 offset = staging_buffer.Copy(gpu_addr, size, 16);
     return {&staging_buffer, offset};
 }
@@ -362,7 +376,7 @@ bool BufferCache::IsRegionRegistered(VAddr addr, size_t size) {
         if (buf_start_addr < end_addr && addr < buf_end_addr) {
             return true;
         }
-        page = Common::DivCeil(end_addr, CACHING_PAGESIZE);
+        page = Common::DivCeil(buf_end_addr, CACHING_PAGESIZE);
     }
     return false;
 }
@@ -620,10 +634,10 @@ void BufferCache::SynchronizeBuffer(Buffer& buffer, VAddr device_addr, u32 size,
 bool BufferCache::SynchronizeBufferFromImage(Buffer& buffer, VAddr device_addr, u32 size) {
     static constexpr FindFlags find_flags =
         FindFlags::NoCreate | FindFlags::RelaxDim | FindFlags::RelaxFmt | FindFlags::RelaxSize;
-    ImageInfo info{};
-    info.guest_address = device_addr;
-    info.guest_size_bytes = size;
-    const ImageId image_id = texture_cache.FindImage(info, find_flags);
+    TextureCache::BaseDesc desc{};
+    desc.info.guest_address = device_addr;
+    desc.info.guest_size_bytes = size;
+    const ImageId image_id = texture_cache.FindImage(desc, find_flags);
     if (!image_id) {
         return false;
     }
@@ -635,7 +649,7 @@ bool BufferCache::SynchronizeBufferFromImage(Buffer& buffer, VAddr device_addr, 
                "Texel buffer aliases image subresources {:x} : {:x}", device_addr,
                image.info.guest_address);
     boost::container::small_vector<vk::BufferImageCopy, 8> copies;
-    u32 offset = buffer.Offset(image.cpu_addr);
+    u32 offset = buffer.Offset(image.info.guest_address);
     const u32 num_layers = image.info.resources.layers;
     const u32 max_offset = offset + size;
     for (u32 m = 0; m < image.info.resources.levels; m++) {

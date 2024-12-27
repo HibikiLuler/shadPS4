@@ -10,6 +10,7 @@
 #include "shader_recompiler/ir/attribute.h"
 #include "shader_recompiler/ir/basic_block.h"
 #include "shader_recompiler/ir/condition.h"
+#include "shader_recompiler/ir/patch.h"
 #include "shader_recompiler/ir/value.h"
 
 namespace Shader::IR {
@@ -80,9 +81,17 @@ public:
 
     [[nodiscard]] U1 Condition(IR::Condition cond);
 
-    [[nodiscard]] F32 GetAttribute(Attribute attribute, u32 comp = 0, u32 index = 0);
+    [[nodiscard]] F32 GetAttribute(Attribute attribute, u32 comp = 0,
+                                   IR::Value index = IR::Value(u32(0u)));
     [[nodiscard]] U32 GetAttributeU32(Attribute attribute, u32 comp = 0);
     void SetAttribute(Attribute attribute, const F32& value, u32 comp = 0);
+
+    [[nodiscard]] F32 GetTessGenericAttribute(const U32& vertex_index, const U32& attr_index,
+                                              const U32& comp_index);
+    void SetTcsGenericAttribute(const F32& value, const U32& attr_index, const U32& comp_index);
+
+    [[nodiscard]] F32 GetPatch(Patch patch);
+    void SetPatch(Patch patch, const F32& value);
 
     [[nodiscard]] Value LoadShared(int bit_size, bool is_signed, const U32& offset);
     void WriteShared(int bit_size, const Value& value, const U32& offset);
@@ -90,6 +99,9 @@ public:
     [[nodiscard]] U32F32 SharedAtomicIAdd(const U32& address, const U32F32& data);
     [[nodiscard]] U32 SharedAtomicIMin(const U32& address, const U32& data, bool is_signed);
     [[nodiscard]] U32 SharedAtomicIMax(const U32& address, const U32& data, bool is_signed);
+    [[nodiscard]] U32 SharedAtomicAnd(const U32& address, const U32& data);
+    [[nodiscard]] U32 SharedAtomicOr(const U32& address, const U32& data);
+    [[nodiscard]] U32 SharedAtomicXor(const U32& address, const U32& data);
 
     [[nodiscard]] U32 ReadConst(const Value& base, const U32& offset);
     [[nodiscard]] U32 ReadConstBuffer(const Value& handle, const U32& index);
@@ -135,6 +147,8 @@ public:
     [[nodiscard]] Value CompositeConstruct(const Value& e1, const Value& e2, const Value& e3);
     [[nodiscard]] Value CompositeConstruct(const Value& e1, const Value& e2, const Value& e3,
                                            const Value& e4);
+    [[nodiscard]] Value CompositeConstruct(std::span<const Value> values);
+
     [[nodiscard]] Value CompositeExtract(const Value& vector, size_t element);
     [[nodiscard]] Value CompositeInsert(const Value& vector, const Value& object, size_t element);
 
@@ -155,6 +169,7 @@ public:
     [[nodiscard]] F32F64 FPAdd(const F32F64& a, const F32F64& b);
     [[nodiscard]] F32F64 FPSub(const F32F64& a, const F32F64& b);
     [[nodiscard]] F32F64 FPMul(const F32F64& a, const F32F64& b);
+    [[nodiscard]] F32F64 FPDiv(const F32F64& a, const F32F64& b);
     [[nodiscard]] F32F64 FPFma(const F32F64& a, const F32F64& b, const F32F64& c);
 
     [[nodiscard]] F32F64 FPAbs(const F32F64& value);
@@ -176,7 +191,9 @@ public:
     [[nodiscard]] F32F64 FPFloor(const F32F64& value);
     [[nodiscard]] F32F64 FPCeil(const F32F64& value);
     [[nodiscard]] F32F64 FPTrunc(const F32F64& value);
-    [[nodiscard]] F32 Fract(const F32& value);
+    [[nodiscard]] F32F64 FPFract(const F32F64& value);
+    [[nodiscard]] F32F64 FPFrexpSig(const F32F64& value);
+    [[nodiscard]] U32 FPFrexpExp(const F32F64& value);
 
     [[nodiscard]] U1 FPEqual(const F32F64& lhs, const F32F64& rhs, bool ordered = true);
     [[nodiscard]] U1 FPNotEqual(const F32F64& lhs, const F32F64& rhs, bool ordered = true);
@@ -308,15 +325,14 @@ public:
                                     TextureInstInfo info);
     [[nodiscard]] Value ImageGatherDref(const Value& handle, const Value& coords,
                                         const Value& offset, const F32& dref, TextureInstInfo info);
-    [[nodiscard]] Value ImageFetch(const Value& handle, const Value& coords, const Value& offset,
-                                   const U32& lod, const U32& multisampling, TextureInstInfo info);
     [[nodiscard]] Value ImageGradient(const Value& handle, const Value& coords,
                                       const Value& derivatives_dx, const Value& derivatives_dy,
                                       const Value& offset, const F32& lod_clamp,
                                       TextureInstInfo info);
-    [[nodiscard]] Value ImageRead(const Value& handle, const Value& coords, TextureInstInfo info);
-    void ImageWrite(const Value& handle, const Value& coords, const Value& color,
-                    TextureInstInfo info);
+    [[nodiscard]] Value ImageRead(const Value& handle, const Value& coords, const U32& lod,
+                                  const U32& multisampling, TextureInstInfo info);
+    void ImageWrite(const Value& handle, const Value& coords, const U32& lod,
+                    const U32& multisampling, const Value& color, TextureInstInfo info);
 
     void EmitVertex();
     void EmitPrimitive();
@@ -327,6 +343,7 @@ private:
     template <typename T = Value, typename... Args>
     T Inst(Opcode op, Args... args) {
         auto it{block->PrependNewInst(insertion_point, op, {Value{args}...})};
+        it->SetParent(block);
         return T{Value{&*it}};
     }
 
@@ -344,6 +361,7 @@ private:
         u32 raw_flags{};
         std::memcpy(&raw_flags, &flags.proxy, sizeof(flags.proxy));
         auto it{block->PrependNewInst(insertion_point, op, {Value{args}...}, raw_flags)};
+        it->SetParent(block);
         return T{Value{&*it}};
     }
 };

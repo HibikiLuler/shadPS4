@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Copyright 2024 shadPS4 Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <set>
 #include <fmt/core.h>
 
 #include "common/config.h"
@@ -22,14 +23,13 @@
 #include "common/scm_rev.h"
 #include "common/singleton.h"
 #include "common/version.h"
-#include "core/file_format/playgo_chunk.h"
 #include "core/file_format/psf.h"
 #include "core/file_format/splash.h"
 #include "core/file_format/trp.h"
 #include "core/file_sys/fs.h"
 #include "core/libraries/disc_map/disc_map.h"
 #include "core/libraries/fiber/fiber.h"
-#include "core/libraries/kernel/thread_management.h"
+#include "core/libraries/jpeg/jpegenc.h"
 #include "core/libraries/libc_internal/libc_internal.h"
 #include "core/libraries/libs.h"
 #include "core/libraries/ngs2/ngs2.h"
@@ -76,6 +76,9 @@ Emulator::Emulator() {
     LOG_INFO(Config, "Vulkan rdocMarkersEnable: {}", Config::vkMarkersEnabled());
     LOG_INFO(Config, "Vulkan crashDiagnostics: {}", Config::vkCrashDiagnosticEnabled());
 
+    // Create stdin/stdout/stderr
+    Common::Singleton<FileSys::HandleTable>::Instance()->CreateStdHandles();
+
     // Defer until after logging is initialized.
     memory = Core::Memory::Instance();
     controller = Common::Singleton<Input::GameController>::Instance();
@@ -98,15 +101,17 @@ Emulator::Emulator() {
 
 Emulator::~Emulator() {
     const auto config_dir = Common::FS::GetUserPath(Common::FS::PathType::UserDir);
-    Config::save(config_dir / "config.toml");
+    Config::saveMainWindow(config_dir / "config.toml");
 }
 
 void Emulator::Run(const std::filesystem::path& file) {
 
     // Use the eboot from the separated updates folder if it's there
-    std::filesystem::path game_patch_folder = file.parent_path().concat("-UPDATE");
-    bool use_game_patch = std::filesystem::exists(game_patch_folder / "sce_sys");
-    std::filesystem::path eboot_path = use_game_patch ? game_patch_folder / file.filename() : file;
+    std::filesystem::path game_patch_folder = file.parent_path();
+    game_patch_folder += "-UPDATE";
+    std::filesystem::path eboot_path = std::filesystem::exists(game_patch_folder / file.filename())
+                                           ? game_patch_folder / file.filename()
+                                           : file;
 
     // Applications expect to be run from /app0 so mount the file's parent path as app0.
     auto* mnt = Common::Singleton<Core::FileSys::MntPoints>::Instance();
@@ -157,14 +162,7 @@ void Emulator::Run(const std::filesystem::path& file) {
                 fw_version = param_sfo->GetInteger("SYSTEM_VER").value_or(0x4700000);
                 app_version = param_sfo->GetString("APP_VER").value_or("Unknown version");
                 LOG_INFO(Loader, "Fw: {:#x} App Version: {}", fw_version, app_version);
-            } else if (entry.path().filename() == "playgo-chunk.dat") {
-                auto* playgo = Common::Singleton<PlaygoFile>::Instance();
-                auto filepath = sce_sys_folder / "playgo-chunk.dat";
-                if (!playgo->Open(filepath)) {
-                    LOG_ERROR(Loader, "PlayGo: unable to open file");
-                }
-            } else if (entry.path().filename() == "pic0.png" ||
-                       entry.path().filename() == "pic1.png") {
+            } else if (entry.path().filename() == "pic1.png") {
                 auto* splash = Common::Singleton<Splash>::Instance();
                 if (splash->IsLoaded()) {
                     continue;
@@ -222,7 +220,6 @@ void Emulator::Run(const std::filesystem::path& file) {
     VideoCore::SetOutputDir(mount_captures_dir, id);
 
     // Initialize kernel and library facilities.
-    Libraries::Kernel::init_pthreads();
     Libraries::InitHLELibs(&linker->GetHLESymbols());
 
     // Load the module with the linker
@@ -232,18 +229,35 @@ void Emulator::Run(const std::filesystem::path& file) {
     LoadSystemModules(eboot_path, game_info.game_serial);
 
     // Load all prx from game's sce_module folder
-    std::filesystem::path sce_module_folder = file.parent_path() / "sce_module";
-    if (std::filesystem::is_directory(sce_module_folder)) {
-        for (const auto& entry : std::filesystem::directory_iterator(sce_module_folder)) {
-            std::filesystem::path module_path = entry.path();
-            std::filesystem::path update_module_path =
-                eboot_path.parent_path() / "sce_module" / entry.path().filename();
-            if (std::filesystem::exists(update_module_path) && use_game_patch) {
-                module_path = update_module_path;
+    std::vector<std::filesystem::path> modules_to_load;
+    std::filesystem::path game_module_folder = file.parent_path() / "sce_module";
+    if (std::filesystem::is_directory(game_module_folder)) {
+        for (const auto& entry : std::filesystem::directory_iterator(game_module_folder)) {
+            if (entry.is_regular_file()) {
+                modules_to_load.push_back(entry.path());
             }
-            LOG_INFO(Loader, "Loading {}", fmt::UTF(module_path.u8string()));
-            linker->LoadModule(module_path);
         }
+    }
+
+    // Load all prx from separate update's sce_module folder
+    std::filesystem::path update_module_folder = game_patch_folder / "sce_module";
+    if (std::filesystem::is_directory(update_module_folder)) {
+        for (const auto& entry : std::filesystem::directory_iterator(update_module_folder)) {
+            auto it = std::find_if(modules_to_load.begin(), modules_to_load.end(),
+                                   [&entry](const std::filesystem::path& p) {
+                                       return p.filename() == entry.path().filename();
+                                   });
+            if (it != modules_to_load.end()) {
+                *it = entry.path();
+            } else {
+                modules_to_load.push_back(entry.path());
+            }
+        }
+    }
+
+    for (const auto& module_path : modules_to_load) {
+        LOG_INFO(Loader, "Loading {}", fmt::UTF(module_path.u8string()));
+        linker->LoadModule(module_path);
     }
 
 #ifdef ENABLE_DISCORD_RPC
@@ -257,13 +271,11 @@ void Emulator::Run(const std::filesystem::path& file) {
     }
 #endif
 
-    // start execution
-    std::jthread mainthread =
-        std::jthread([this](std::stop_token stop_token) { linker->Execute(); });
+    linker->Execute();
 
-    window->initTimers();
-    while (window->isOpen()) {
-        window->waitEvent();
+    window->InitTimers();
+    while (window->IsOpen()) {
+        window->WaitEvent();
     }
 
 #ifdef ENABLE_QT_GUI
@@ -274,7 +286,7 @@ void Emulator::Run(const std::filesystem::path& file) {
 }
 
 void Emulator::LoadSystemModules(const std::filesystem::path& file, std::string game_serial) {
-    constexpr std::array<SysModules, 11> ModulesToLoad{
+    constexpr std::array<SysModules, 13> ModulesToLoad{
         {{"libSceNgs2.sprx", &Libraries::Ngs2::RegisterlibSceNgs2},
          {"libSceFiber.sprx", &Libraries::Fiber::RegisterlibSceFiber},
          {"libSceUlt.sprx", nullptr},
@@ -283,9 +295,11 @@ void Emulator::LoadSystemModules(const std::filesystem::path& file, std::string 
          {"libSceLibcInternal.sprx", &Libraries::LibcInternal::RegisterlibSceLibcInternal},
          {"libSceDiscMap.sprx", &Libraries::DiscMap::RegisterlibSceDiscMap},
          {"libSceRtc.sprx", &Libraries::Rtc::RegisterlibSceRtc},
-         {"libSceJpegEnc.sprx", nullptr},
-         {"libSceRazorCpu.sprx", nullptr},
-         {"libSceCesCs.sprx", nullptr}}};
+         {"libSceJpegEnc.sprx", &Libraries::JpegEnc::RegisterlibSceJpegEnc},
+         {"libSceCesCs.sprx", nullptr},
+         {"libSceFont.sprx", nullptr},
+         {"libSceFontFt.sprx", nullptr},
+         {"libSceFreeTypeOt.sprx", nullptr}}};
 
     std::vector<std::filesystem::path> found_modules;
     const auto& sys_module_path = Common::FS::GetUserPath(Common::FS::PathType::SysModuleDir);

@@ -14,7 +14,7 @@ namespace Vulkan {
 Swapchain::Swapchain(const Instance& instance_, const Frontend::WindowSDL& window)
     : instance{instance_}, surface{CreateSurface(instance.GetInstance(), window)} {
     FindPresentFormat();
-    Create(window.getWidth(), window.getHeight(), surface);
+    Create(window.GetWidth(), window.GetHeight(), surface);
 }
 
 Swapchain::~Swapchain() {
@@ -112,7 +112,7 @@ bool Swapchain::AcquireNextImage() {
     return !needs_recreation;
 }
 
-void Swapchain::Present() {
+bool Swapchain::Present() {
 
     const vk::PresentInfoKHR present_info = {
         .waitSemaphoreCount = 1,
@@ -131,6 +131,8 @@ void Swapchain::Present() {
     }
 
     frame_index = (frame_index + 1) % image_count;
+
+    return !needs_recreation;
 }
 
 void Swapchain::FindPresentFormat() {

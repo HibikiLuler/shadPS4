@@ -36,6 +36,7 @@ public:
     QAction* setThemeGreen;
     QAction* setThemeBlue;
     QAction* setThemeViolet;
+    QAction* setThemeGruvbox;
     QWidget* centralWidget;
     QLineEdit* mw_searchbar;
     QPushButton* playButton;
@@ -110,15 +111,14 @@ public:
         setIconSizeLargeAct->setCheckable(true);
         setlistModeListAct = new QAction(MainWindow);
         setlistModeListAct->setObjectName("setlistModeListAct");
-        setlistModeListAct->setCheckable(true);
-        setlistModeListAct->setChecked(true);
         setlistModeListAct->setIcon(QIcon(":images/list_icon.png"));
+        setlistModeListAct->setCheckable(true);
         setlistModeGridAct = new QAction(MainWindow);
         setlistModeGridAct->setObjectName("setlistModeGridAct");
-        setlistModeGridAct->setCheckable(true);
         setlistModeGridAct->setIcon(QIcon(":images/grid_icon.png"));
+        setlistModeGridAct->setCheckable(true);
         setlistElfAct = new QAction(MainWindow);
-        setlistElfAct->setObjectName("setlistModeGridAct");
+        setlistElfAct->setObjectName("setlistElfAct");
         setlistElfAct->setCheckable(true);
         gameInstallPathAct = new QAction(MainWindow);
         gameInstallPathAct->setObjectName("gameInstallPathAct");
@@ -159,6 +159,9 @@ public:
         setThemeViolet = new QAction(MainWindow);
         setThemeViolet->setObjectName("setThemeViolet");
         setThemeViolet->setCheckable(true);
+        setThemeGruvbox = new QAction(MainWindow);
+        setThemeGruvbox->setObjectName("setThemeGruvbox");
+        setThemeGruvbox->setCheckable(true);
         centralWidget = new QWidget(MainWindow);
         centralWidget->setObjectName("centralWidget");
         sizePolicy.setHeightForWidth(centralWidget->sizePolicy().hasHeightForWidth());
@@ -250,6 +253,7 @@ public:
         menuSettings->setObjectName("menuSettings");
         menuUtils = new QMenu(menuSettings);
         menuUtils->setObjectName("menuUtils");
+        menuUtils->setIcon(QIcon(":images/utils_icon.png"));
         menuThemes = new QMenu(menuView);
         menuThemes->setObjectName("menuThemes");
         menuThemes->setIcon(QIcon(":images/themes_icon.png"));
@@ -282,6 +286,7 @@ public:
         menuThemes->addAction(setThemeGreen);
         menuThemes->addAction(setThemeBlue);
         menuThemes->addAction(setThemeViolet);
+        menuThemes->addAction(setThemeGruvbox);
         menuGame_List_Icons->addAction(setIconSizeTinyAct);
         menuGame_List_Icons->addAction(setIconSizeSmallAct);
         menuGame_List_Icons->addAction(setIconSizeMediumAct);
@@ -368,6 +373,7 @@ public:
         setThemeGreen->setText(QCoreApplication::translate("MainWindow", "Green", nullptr));
         setThemeBlue->setText(QCoreApplication::translate("MainWindow", "Blue", nullptr));
         setThemeViolet->setText(QCoreApplication::translate("MainWindow", "Violet", nullptr));
+        setThemeGruvbox->setText("Gruvbox");
         toolBar->setWindowTitle(QCoreApplication::translate("MainWindow", "toolBar", nullptr));
     } // retranslateUi
 };

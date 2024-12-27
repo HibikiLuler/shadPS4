@@ -43,6 +43,9 @@ OPCODE(SharedAtomicSMin32,                                  U32,            U32,
 OPCODE(SharedAtomicUMin32,                                  U32,            U32,            U32,                                                            )
 OPCODE(SharedAtomicSMax32,                                  U32,            U32,            U32,                                                            )
 OPCODE(SharedAtomicUMax32,                                  U32,            U32,            U32,                                                            )
+OPCODE(SharedAtomicAnd32,                                   U32,            U32,            U32,                                                            )
+OPCODE(SharedAtomicOr32,                                    U32,            U32,            U32,                                                            )
+OPCODE(SharedAtomicXor32,                                   U32,            U32,            U32,                                                            )
 
 // Context getters/setters
 OPCODE(GetUserData,                                         U32,            ScalarReg,                                                                      )
@@ -57,6 +60,10 @@ OPCODE(SetGotoVariable,                                     Void,           U32,
 OPCODE(GetAttribute,                                        F32,            Attribute,      U32,            U32,                                            )
 OPCODE(GetAttributeU32,                                     U32,            Attribute,      U32,                                                            )
 OPCODE(SetAttribute,                                        Void,           Attribute,      F32,            U32,                                            )
+OPCODE(GetPatch,                                            F32,            Patch,                                                                          )
+OPCODE(SetPatch,                                            Void,           Patch,          F32,                                                            )
+OPCODE(GetTessGenericAttribute,                             F32,            U32,            U32,            U32,                                            )
+OPCODE(SetTcsGenericAttribute,                              Void,           F32,            U32,            U32,                                            )
 
 // Flags
 OPCODE(GetScc,                                              U1,             Void,                                                                           )
@@ -181,6 +188,8 @@ OPCODE(FPMin32,                                             F32,            F32,
 OPCODE(FPMin64,                                             F64,            F64,            F64,                                                            )
 OPCODE(FPMul32,                                             F32,            F32,            F32,                                                            )
 OPCODE(FPMul64,                                             F64,            F64,            F64,                                                            )
+OPCODE(FPDiv32,                                             F32,            F32,            F32,                                                            )
+OPCODE(FPDiv64,                                             F64,            F64,            F64,                                                            )
 OPCODE(FPNeg32,                                             F32,            F32,                                                                            )
 OPCODE(FPNeg64,                                             F64,            F64,                                                                            )
 OPCODE(FPRecip32,                                           F32,            F32,                                                                            )
@@ -205,7 +214,12 @@ OPCODE(FPCeil32,                                            F32,            F32,
 OPCODE(FPCeil64,                                            F64,            F64,                                                                            )
 OPCODE(FPTrunc32,                                           F32,            F32,                                                                            )
 OPCODE(FPTrunc64,                                           F64,            F64,                                                                            )
-OPCODE(FPFract,                                             F32,            F32,                                                                            )
+OPCODE(FPFract32,                                           F32,            F32,                                                                            )
+OPCODE(FPFract64,                                           F64,            F64,                                                                            )
+OPCODE(FPFrexpSig32,                                        F32,            F32,                                                                            )
+OPCODE(FPFrexpSig64,                                        F64,            F64,                                                                            )
+OPCODE(FPFrexpExp32,                                        U32,            F32,                                                                            )
+OPCODE(FPFrexpExp64,                                        U32,            F64,                                                                            )
 
 OPCODE(FPOrdEqual32,                                        U1,             F32,            F32,                                                            )
 OPCODE(FPOrdEqual64,                                        U1,             F64,            F64,                                                            )
@@ -324,12 +338,11 @@ OPCODE(ImageSampleDrefImplicitLod,                          F32x4,          Opaq
 OPCODE(ImageSampleDrefExplicitLod,                          F32x4,          Opaque,         Opaque,         F32,            F32,            Opaque,         )
 OPCODE(ImageGather,                                         F32x4,          Opaque,         Opaque,         Opaque,                                         )
 OPCODE(ImageGatherDref,                                     F32x4,          Opaque,         Opaque,         Opaque,         F32,                            )
-OPCODE(ImageFetch,                                          F32x4,          Opaque,         Opaque,         Opaque,         U32,            Opaque,         )
 OPCODE(ImageQueryDimensions,                                U32x4,          Opaque,         U32,            U1,                                             )
 OPCODE(ImageQueryLod,                                       F32x4,          Opaque,         Opaque,                                                         )
 OPCODE(ImageGradient,                                       F32x4,          Opaque,         Opaque,         Opaque,         Opaque,         Opaque,         F32,         )
-OPCODE(ImageRead,                                           U32x4,          Opaque,         Opaque,                                                         )
-OPCODE(ImageWrite,                                          Void,           Opaque,         Opaque,         U32x4,                                          )
+OPCODE(ImageRead,                                           U32x4,          Opaque,         Opaque,         U32,            U32,                            )
+OPCODE(ImageWrite,                                          Void,           Opaque,         Opaque,         U32,            U32,            U32x4,          )
 
 // Image atomic operations
 OPCODE(ImageAtomicIAdd32,                                   U32,            Opaque,         Opaque,         U32,                                            )

@@ -6,7 +6,7 @@
 #include "video_core/amdgpu/pixel_format.h"
 #include "video_core/renderer_vulkan/liverpool_to_vk.h"
 
-#include <magic_enum.hpp>
+#include <magic_enum/magic_enum.hpp>
 
 #define INVALID_NUMBER_FORMAT_COMBO                                                                \
     LOG_ERROR(Render_Vulkan, "Unsupported number type {} for format {}", number_type, format);
@@ -65,6 +65,33 @@ vk::CompareOp CompareOp(Liverpool::CompareFunc func) {
     }
 }
 
+bool IsPrimitiveCulled(AmdGpu::PrimitiveType type) {
+    switch (type) {
+    case AmdGpu::PrimitiveType::TriangleList:
+    case AmdGpu::PrimitiveType::TriangleFan:
+    case AmdGpu::PrimitiveType::TriangleStrip:
+    case AmdGpu::PrimitiveType::PatchPrimitive:
+    case AmdGpu::PrimitiveType::AdjTriangleList:
+    case AmdGpu::PrimitiveType::AdjTriangleStrip:
+    case AmdGpu::PrimitiveType::QuadList:
+    case AmdGpu::PrimitiveType::QuadStrip:
+    case AmdGpu::PrimitiveType::Polygon:
+        return true;
+    case AmdGpu::PrimitiveType::None:
+    case AmdGpu::PrimitiveType::PointList:
+    case AmdGpu::PrimitiveType::LineList:
+    case AmdGpu::PrimitiveType::LineStrip:
+    case AmdGpu::PrimitiveType::AdjLineList:
+    case AmdGpu::PrimitiveType::AdjLineStrip:
+    case AmdGpu::PrimitiveType::RectList: // Screen-aligned rectangles that are not culled
+    case AmdGpu::PrimitiveType::LineLoop:
+        return false;
+    default:
+        UNREACHABLE();
+        return true;
+    }
+}
+
 vk::PrimitiveTopology PrimitiveType(AmdGpu::PrimitiveType type) {
     switch (type) {
     case AmdGpu::PrimitiveType::PointList:
@@ -89,11 +116,12 @@ vk::PrimitiveTopology PrimitiveType(AmdGpu::PrimitiveType type) {
         return vk::PrimitiveTopology::eTriangleStripWithAdjacency;
     case AmdGpu::PrimitiveType::PatchPrimitive:
         return vk::PrimitiveTopology::ePatchList;
-    case AmdGpu::PrimitiveType::QuadList:
+    case AmdGpu::PrimitiveType::Polygon:
         // Needs to generate index buffer on the fly.
         return vk::PrimitiveTopology::eTriangleList;
+    case AmdGpu::PrimitiveType::QuadList:
     case AmdGpu::PrimitiveType::RectList:
-        return vk::PrimitiveTopology::eTriangleStrip;
+        return vk::PrimitiveTopology::ePatchList;
     default:
         UNREACHABLE();
         return vk::PrimitiveTopology::eTriangleList;
@@ -285,10 +313,10 @@ vk::SamplerMipmapMode MipFilter(AmdGpu::MipFilter filter) {
 
 vk::BorderColor BorderColor(AmdGpu::BorderColor color) {
     switch (color) {
-    case AmdGpu::BorderColor::OpaqueBlack:
-        return vk::BorderColor::eFloatOpaqueBlack;
     case AmdGpu::BorderColor::TransparentBlack:
         return vk::BorderColor::eFloatTransparentBlack;
+    case AmdGpu::BorderColor::OpaqueBlack:
+        return vk::BorderColor::eFloatOpaqueBlack;
     case AmdGpu::BorderColor::White:
         return vk::BorderColor::eFloatOpaqueWhite;
     case AmdGpu::BorderColor::Custom:
@@ -652,7 +680,7 @@ vk::Format SurfaceFormat(AmdGpu::DataFormat data_format, AmdGpu::NumberFormat nu
 }
 
 vk::Format AdjustColorBufferFormat(vk::Format base_format,
-                                   Liverpool::ColorBuffer::SwapMode comp_swap, bool is_vo_surface) {
+                                   Liverpool::ColorBuffer::SwapMode comp_swap) {
     const bool comp_swap_alt = comp_swap == Liverpool::ColorBuffer::SwapMode::Alternate;
     const bool comp_swap_reverse = comp_swap == Liverpool::ColorBuffer::SwapMode::StandardReverse;
     const bool comp_swap_alt_reverse =
@@ -664,32 +692,13 @@ vk::Format AdjustColorBufferFormat(vk::Format base_format,
         case vk::Format::eB8G8R8A8Unorm:
             return vk::Format::eR8G8B8A8Unorm;
         case vk::Format::eR8G8B8A8Srgb:
-            return is_vo_surface ? vk::Format::eB8G8R8A8Unorm : vk::Format::eB8G8R8A8Srgb;
+            return vk::Format::eB8G8R8A8Srgb;
         case vk::Format::eB8G8R8A8Srgb:
-            return is_vo_surface ? vk::Format::eR8G8B8A8Unorm : vk::Format::eR8G8B8A8Srgb;
+            return vk::Format::eR8G8B8A8Srgb;
         case vk::Format::eA2B10G10R10UnormPack32:
             return vk::Format::eA2R10G10B10UnormPack32;
         default:
             break;
-        }
-    } else if (comp_swap_reverse) {
-        switch (base_format) {
-        case vk::Format::eR8G8B8A8Unorm:
-            return vk::Format::eA8B8G8R8UnormPack32;
-        case vk::Format::eR8G8B8A8Srgb:
-            return is_vo_surface ? vk::Format::eA8B8G8R8UnormPack32
-                                 : vk::Format::eA8B8G8R8SrgbPack32;
-        default:
-            break;
-        }
-    } else if (comp_swap_alt_reverse) {
-        return base_format;
-    } else {
-        if (is_vo_surface && base_format == vk::Format::eR8G8B8A8Srgb) {
-            return vk::Format::eR8G8B8A8Unorm;
-        }
-        if (is_vo_surface && base_format == vk::Format::eB8G8R8A8Srgb) {
-            return vk::Format::eB8G8R8A8Unorm;
         }
     }
     return base_format;
@@ -734,19 +743,6 @@ vk::Format DepthFormat(DepthBuffer::ZFormat z_format, DepthBuffer::StencilFormat
     ASSERT_MSG(format != formats.end(), "Unknown z_format={} and stencil_format={}",
                static_cast<u32>(z_format), static_cast<u32>(stencil_format));
     return format->vk_format;
-}
-
-void EmitQuadToTriangleListIndices(u8* out_ptr, u32 num_vertices) {
-    static constexpr u16 NumVerticesPerQuad = 4;
-    u16* out_data = reinterpret_cast<u16*>(out_ptr);
-    for (u16 i = 0; i < num_vertices; i += NumVerticesPerQuad) {
-        *out_data++ = i;
-        *out_data++ = i + 1;
-        *out_data++ = i + 2;
-        *out_data++ = i;
-        *out_data++ = i + 2;
-        *out_data++ = i + 3;
-    }
 }
 
 vk::ClearValue ColorBufferClearValue(const AmdGpu::Liverpool::ColorBuffer& color_buffer) {
